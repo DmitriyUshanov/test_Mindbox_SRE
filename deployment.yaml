@@ -1,0 +1,90 @@
+apiVersion: apps/v1  # API версия
+kind: Deployment      # Тип ресурса
+metadata:
+  name: web-app       # Имя
+  labels:
+    app: web-app      # Метка для селекторов
+spec:
+  replicas: 4         # Количество реплик (подов) по умолчанию
+  
+  # Стратегия обновления:
+  strategy:
+    type: RollingUpdate  # Постепенное обновление подов
+    rollingUpdate:
+      maxSurge: 1        # Макс. на сколько может превышаться желаемое число подов при обновлении
+      maxUnavailable: 0  # Запрещаем недоступность подов во время обновления
+  
+  selector:           # Селектор для определения принадлежности подов
+    matchLabels:
+      app: web-app    # Выбираем только поды с этой меткой
+  
+  template:          # Шаблон для создания подов
+    metadata:
+      labels:
+        app: web-app # Метка для пода
+    spec:
+      # Ограничения распределения по топологии:
+      topologySpreadConstraints:
+        - maxSkew: 1  # Максимальная разница в количестве подов между зонами
+          topologyKey: topology.kubernetes.io/zone  # Ключ зоны доступности
+          whenUnsatisfiable: ScheduleAnyway  # Запускать даже если нельзя равномерно распределить
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname  # Ключ имени ноды
+          whenUnsatisfiable: ScheduleAnyway
+      
+      containers:
+        - name: web-app  # Имя контейнера
+          image: your-registry/web-app:latest  # Образ контейнера
+          ports:
+            - containerPort: 8080  # Порт контейнера
+          
+          # Ограничения ресурсов:
+          resources:
+            requests:  # Гарантированные ресурсы
+              cpu: "0.05"  # 50 милли CPU (5% ядра)
+              memory: "128Mi"  # 128 мебибайт
+            limits:    # Максимальные ресурсы
+              cpu: "0.5"  # 500 милли CPU (50% ядра)
+              memory: "128Mi"  # Жесткий лимит памяти
+          
+          # Проверка готовности:
+          readinessProbe:
+            httpGet:     # Проверка HTTP GET запросом
+              path: /health  # Эндпоинт здоровья
+              port: 8080
+            initialDelaySeconds: 6  # Ожидание перед первой проверкой
+            periodSeconds: 5        # Интервал между проверками
+            failureThreshold: 2     # Количество провалов перед маркировкой "не готов"
+          
+          # Проверка жизнеспособности:
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10  # Больше времени для инициализации
+            periodSeconds: 10        # Реже проверяем чем readiness
+      
+      # Политика завершения:
+      terminationGracePeriodSeconds: 30  # Время на корректное завершение
+
+---
+apiVersion: v1  # API версия для HorizontalPodAutoscaler
+kind: HorizontalPodAutoscaler
+metadata:
+  name: web-app-hpa  # Имя HPA
+spec:
+  scaleTargetRef:    # Цель для масштабирования
+    apiVersion: apps/v1
+    kind: Deployment
+    name: web-app    # Имя Deployment для масштабирования
+  
+  minReplicas: 1     # Минимальное количество подов (ночью)
+  maxReplicas: 4     # Максимальное количество (по нагрузочному тесту)
+  
+  metrics:           # Метрики для масштабирования
+    - type: Resource
+      resource:
+        name: cpu    # Масштабируем по CPU
+        target:
+          type: Utilization
+          averageUtilization: 60  # Целевая загрузка CPU 60%M
